@@ -1,0 +1,345 @@
+from fastapi import FastAPI, Form, File, UploadFile, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from typing import Optional
+from datetime import datetime
+import pymysql
+import shutil
+from pathlib import Path
+from typing import List,Optional
+import os
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
+
+app = FastAPI()
+now = datetime.now()
+
+origins = ["*"]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+def db_conn():
+    return pymysql.connect(
+        host='',
+        port=,
+        user='',
+        password='',
+        database='',
+        charset='utf8',
+        cursorclass=pymysql.cursors.DictCursor,
+    )
+
+@app.post("/Signup")
+async def Singup(
+        name: str = Form(...), 
+        userid: str = Form(...),  
+        password: str = Form(...),
+        passwordck: str = Form(...),
+        email: str = Form(...),
+        phone: str = Form(...)
+    ):
+    """
+    회원가입
+    - userid: 아이디로 사용
+    - password: 비밀번호로 사용
+    """
+
+    save_path = None
+   
+
+    # 데이터 베이스에 저장 작업
+    db = db_conn()
+    try:
+        with db.cursor() as cursor:
+            sql = '''
+                INSERT INTO member (name, userid, password, passwordck, email, phone,   indate) 
+                VALUES (%s, %s, UPPER(SHA1(UNHEX(SHA1(%s)))),UPPER(SHA1(UNHEX(SHA1(%s)))), %s, %s, %s)
+            '''
+            cursor.execute(sql, (
+                name,
+                userid,
+                password,
+                passwordck,
+                email,
+                phone,
+                datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            ))
+            db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+    
+    return {"success": "회원가입이 완료되었습니다.", "image_path": str(save_path)}
+    
+@app.post("/Login")
+async def Login(
+        userid: str = Form(...), 
+        password: str = Form(...)
+    ):
+    '''
+    로그인
+    '''
+    db = db_conn()
+    try:
+        with db.cursor() as cursor:
+            sql = '''
+                SELECT name FROM member 
+                WHERE userid = %s AND password = UPPER(SHA1(UNHEX(SHA1(%s))))
+            '''
+            cursor.execute(sql, (userid, password))
+            row = cursor.fetchone()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+    if row:
+        return {"success": True, "name": row["name"]}  
+    else:
+        return {"success": False, "message": "아이디 또는 비밀번호가 잘못되었습니다."}
+
+@app.post("/check_userid")
+async def check_userid(userid: str = Form(...)):
+    """
+    아이디 중복 확인
+    """
+    db = db_conn()
+    try:
+        with db.cursor() as cursor:
+            sql = '''
+                SELECT COUNT(*) as count FROM member WHERE userid = %s
+            '''
+            cursor.execute(sql, (userid,))
+            result = cursor.fetchone()
+            if result['count'] > 0:
+                return {"exists": True}
+            else:
+                return {"exists": False}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+@app.post("/Postform")
+async def Postform(
+        userid: str = Form(...), 
+        title: str = Form(...),
+        contents: str = Form(...),
+        img: Optional[UploadFile] = File(None, description="첨부사진")
+    ):
+    '''
+    게시판작성
+    '''
+    save_path = None
+    if img:
+        save_path = Path("app/upload") / img.filename
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        with save_path.open("wb") as buffer:
+            shutil.copyfileobj(img.file, buffer)
+        img_filename = img.filename
+    else:
+        img_filename = ""
+
+    db = db_conn()
+    try:
+        with db.cursor() as cursor:
+            sql = '''
+                INSERT INTO TB_BOARD (userid,title,contents,img,create_at)
+                VALUES (%s,%s,%s,%s,%s)
+            '''
+            cursor.execute(sql, (
+                userid, 
+                title,
+                contents,
+                img_filename,
+                datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                ))
+            db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+    
+    return {"success": "게시글 작성완료.", "image_path": str(save_path)}   
+
+
+
+@app.get("/Postlist")
+async def Postlist():
+    db = db_conn()
+    try:
+        with db.cursor() as cursor:
+            sql = '''
+                SELECT post_id,userid, title, contents, img, create_at
+                FROM TB_BOARD
+                ORDER BY create_at DESC
+            '''
+            cursor.execute(sql)
+            posts = cursor.fetchall()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+    
+    return posts
+
+UPLOAD_DIRECTORY = "app/upload"
+
+@app.get("/imag/{img}")
+async def get_imag(img: str):
+    image_path = Path(UPLOAD_DIRECTORY) / img
+    if image_path.is_file():
+        return FileResponse(image_path)
+    else:
+        raise HTTPException(status_code=404, detail="File not found")
+    
+@app.get("/PostDetail/{post_id}")
+async def post_detail(post_id: int):
+    db = db_conn()
+    try:
+        with db.cursor() as cursor:
+            sql = '''
+                SELECT userid, title, contents, img, create_at
+                FROM TB_BOARD
+                WHERE post_id = %s
+            '''
+            cursor.execute(sql, (post_id,))
+            post = cursor.fetchone()
+            if not post:
+                raise HTTPException(status_code=404, detail="게시글을 찾을 수 없습니다.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+    return post
+
+# 게시글 수정 API
+class PostUpdate(BaseModel):
+    title: str
+    contents: str
+@app.put("/PostDetail/{post_id}")
+async def update_post(
+    post_id: int,
+    title: str = Form(...),
+    contents: str = Form(...),
+    img: Optional[UploadFile] = File(None)  # 이미지 파일을 업로드 받음 (선택 사항)
+):
+    db = db_conn()
+    try:
+        with db.cursor() as cursor:
+            # 제목과 내용 업데이트
+            sql_update = '''
+                UPDATE TB_BOARD
+                SET title = %s, contents = %s
+                WHERE post_id = %s
+            '''
+            cursor.execute(sql_update, (title, contents, post_id))
+
+            # 이미지 업데이트
+            if img:
+                # 기존 이미지 파일 삭제
+                old_img_path = f"app/upload/{post_id}.jpg"
+                if os.path.exists(old_img_path):
+                    os.remove(old_img_path)
+
+                # 새 이미지 파일 저장
+                save_path = Path("app/upload") / img.filename
+                save_path.parent.mkdir(parents=True, exist_ok=True)
+                with save_path.open("wb") as buffer:
+                    shutil.copyfileobj(img.file, buffer)
+
+                # 이미지 파일명 업데이트
+                sql_update_img = '''
+                    UPDATE TB_BOARD
+                    SET img = %s
+                    WHERE post_id = %s
+                '''
+                cursor.execute(sql_update_img, (img.filename, post_id))
+
+            db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+    return {"success": "게시글이 수정되었습니다."}
+
+# 게시글 삭제 API
+@app.delete("/PostDetail/{userid}")
+async def delete_post(post_id: int):
+    db = db_conn()
+    try:
+        with db.cursor() as cursor:
+            sql = '''
+                DELETE FROM TB_BOARD
+                WHERE post_id = %s
+            '''
+            cursor.execute(sql, (post_id,))
+            db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+    
+    return {"success": "게시글이 삭제되었습니다."}
+# 댓글 작성 API
+@app.post("/Comments")
+async def Comments(
+        post_id: str = Form(...), 
+        userid: str = Form(...), 
+        contents: str = Form(...),
+    ):
+    '''
+    댓글작성
+    '''
+    save_path = None
+    db = db_conn()
+    try:
+        with db.cursor() as cursor:
+            sql = '''
+                INSERT INTO Comments (post_id,userid,contents,cm_date)
+                VALUES (%s,%s,%s,%s)
+            '''
+            cursor.execute(sql, (
+                post_id,
+                userid, 
+                contents,
+                datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                ))
+            db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+    
+    return {"success": "댓글 작성완료.", "image_path": str(save_path)}
+
+@app.get("/Comments/{post_id}")
+async def get_comments(post_id: str):
+    db = db_conn()
+    try:
+        with db.cursor() as cursor:
+            sql = '''
+                SELECT * FROM Comments
+                WHERE post_id = %s
+                ORDER BY cm_date DESC
+            '''
+            cursor.execute(sql, (post_id,))
+            comments = cursor.fetchall()
+            return comments
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
