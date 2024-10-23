@@ -1,8 +1,9 @@
 <h1>국내 여행 추천 사이트 요기조기</h1><br>
-<hr><br>
+
 <h3>이용자들에게 국내 여행지를 추천하는 사이트</h3><br>
 <h3>사용언어</h3><br>
-<b>React,FastAPI,MySQL</b><br>
+<b>React,FastAPI,MySQL,phpAdmin</b><br>
+<hr><br>
 <h3>기능소개</h3>
 <p>1.로그인회원가입</p><br>
 <p>2. 메인화면 배너 클릭시 링크로 국내여행지 소개 유튜브 설명 및 구글맵으로 위치표시</p><br>
